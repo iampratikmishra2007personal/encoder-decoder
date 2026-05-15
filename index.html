@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CIPHER — Secret Message Encoder</title>
+<style>
+
+  :root {
+    --bg: #08090a;
+    --surface: #0e1014;
+    --panel: #13161b;
+    --border: #1e2430;
+    --accent: #00ff9d;
+    --accent2: #ff3c6e;
+    --accent3: #ffcc00;
+    --text: #c8d0dc;
+    --muted: #4a5568;
+    --glow: 0 0 20px rgba(0,255,157,0.25);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Courier New', Courier, monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.08) 2px,
+      rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 999;
+  }
+
+  /* Noise texture */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 998;
+    opacity: 0.4;
+  }
+
+  .header {
+    border-bottom: 1px solid var(--border);
+    padding: 1.5rem 2rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .header::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    animation: scanH 4s ease-in-out infinite;
+  }
+
+  @keyframes scanH {
+    0%, 100% { transform: translateX(-100%); opacity: 0; }
+    50% { transform: translateX(100%); opacity: 1; }
+  }
+
+  .logo {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 2.5rem;
+    color: var(--accent);
+    letter-spacing: 6px;
+    text-shadow: var(--glow);
+    line-height: 1;
+  }
+
+  .logo-sub {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.65rem;
+    color: var(--muted);
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    margin-top: 2px;
+  }
+
+  .status-bar {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--accent);
+  }
+
+  .blink {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: blink 1.2s step-end infinite;
+    box-shadow: 0 0 8px var(--accent);
+  }
+
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+  .container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 2rem;
+  }
+
+  /* Mode selector */
+  .mode-bar {
+    display: flex;
+    gap: 0;
+    margin-bottom: 2rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .mode-btn {
+    flex: 1;
+    padding: 0.85rem;
+    background: var(--panel);
+    border: none;
+    color: var(--muted);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.8rem;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.2s;
+    border-right: 1px solid var(--border);
+  }
+
+  .mode-btn:last-child { border-right: none; }
+
+  .mode-btn.active {
+    background: rgba(0,255,157,0.1);
+    color: var(--accent);
+    text-shadow: 0 0 12px var(--accent);
+  }
+
+  .mode-btn:hover:not(.active) {
+    background: var(--surface);
+    color: var(--text);
+  }
+
+  /* Cipher selector */
+  .cipher-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 2rem;
+  }
+
+  .cipher-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1rem 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: center;
+  }
+
+  .cipher-card:hover {
+    border-color: var(--muted);
+    background: var(--surface);
+  }
+
+  .cipher-card.selected {
+    border-color: var(--accent);
+    background: rgba(0,255,157,0.07);
+    box-shadow: 0 0 16px rgba(0,255,157,0.12);
+  }
+
+  .cipher-icon { font-size: 1.6rem; display: block; margin-bottom: 0.4rem; }
+
+  .cipher-name {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text);
+  }
+
+  .cipher-card.selected .cipher-name { color: var(--accent); }
+
+  /* Key input for Caesar */
+  .key-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+
+  .key-label {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 2px;
+    color: var(--muted);
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .key-input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.9rem;
+    padding: 0.4rem 0.75rem;
+    border-radius: 3px;
+    width: 80px;
+    text-align: center;
+  }
+
+  .key-input:focus { outline: none; border-color: var(--accent); }
+
+  input[type=range] {
+    flex: 1;
+    accent-color: var(--accent);
+    height: 4px;
+  }
+
+  /* Text areas */
+  .io-grid {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 1rem;
+    align-items: start;
+    margin-bottom: 1.5rem;
+  }
+
+  .io-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .io-header {
+    padding: 0.6rem 1rem;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .io-label {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .char-count {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--muted);
+  }
+
+  .io-textarea {
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.88rem;
+    line-height: 1.7;
+    padding: 1rem;
+    resize: none;
+    min-height: 180px;
+  }
+
+  .io-textarea:focus { outline: none; }
+  .io-textarea::placeholder { color: var(--muted); opacity: 0.5; }
+
+  .io-textarea.output {
+    color: var(--accent);
+  }
+
+  /* Arrow */
+  .arrow-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding-top: 3.5rem;
+    gap: 0.5rem;
+  }
+
+  .arrow-icon {
+    font-size: 1.5rem;
+    color: var(--accent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.15); }
+  }
+
+  /* Action buttons */
+  .actions {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    padding: 0.75rem 1.5rem;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: var(--bg);
+    font-weight: 700;
+  }
+
+  .btn-primary:hover {
+    box-shadow: 0 0 20px rgba(0,255,157,0.5);
+    transform: translateY(-1px);
+  }
+
+  .btn-secondary {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+
+  .btn-secondary:hover {
+    border-color: var(--muted);
+    color: var(--accent);
+  }
+
+  .btn-danger {
+    background: transparent;
+    color: var(--accent2);
+    border: 1px solid rgba(255,60,110,0.3);
+  }
+
+  .btn-danger:hover {
+    background: rgba(255,60,110,0.1);
+    border-color: var(--accent2);
+  }
+
+  /* Copy toast */
+  .toast {
+    position: fixed;
+    bottom: 2rem;
+    right: 2rem;
+    background: var(--accent);
+    color: var(--bg);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 2px;
+    padding: 0.75rem 1.5rem;
+    border-radius: 3px;
+    transform: translateY(80px);
+    opacity: 0;
+    transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    z-index: 1000;
+    font-weight: 700;
+  }
+
+  .toast.show {
+    transform: translateY(0);
+    opacity: 1;
+  }
+
+  /* Emoji legend toggle */
+  .legend-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 2px;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.2s;
+    user-select: none;
+  }
+
+  .legend-toggle:hover { color: var(--accent3); border-color: rgba(255,204,0,0.3); }
+
+  .legend {
+    display: none;
+    margin-top: 1rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1.25rem;
+  }
+
+  .legend.open { display: block; }
+
+  .legend-title {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent3);
+    margin-bottom: 1rem;
+  }
+
+  .legend-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+    gap: 0.5rem;
+  }
+
+  .legend-item {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.35rem 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--muted);
+  }
+
+  .legend-item span:first-child { font-size: 1rem; }
+
+  /* Responsive */
+  @media (max-width: 640px) {
+    .io-grid { grid-template-columns: 1fr; }
+    .arrow-col { flex-direction: row; padding-top: 0; padding: 0.5rem; justify-content: center; }
+    .arrow-icon { transform: rotate(90deg) !important; animation: none; font-size: 1.2rem; }
+    .cipher-grid { grid-template-columns: repeat(3, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div>
+    <div class="logo">CIPHER</div>
+    <div class="logo-sub">Secret Message Encoder / Decoder</div>
+  </div>
+  <div class="status-bar">
+    <div class="blink"></div>
+    SECURE MODE ACTIVE
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- Encode / Decode toggle -->
+  <div class="mode-bar">
+    <button class="mode-btn active" id="encodeBtn" onclick="setMode('encode')">🔒 ENCODE</button>
+    <button class="mode-btn" id="decodeBtn" onclick="setMode('decode')">🔓 DECODE</button>
+  </div>
+
+  <!-- Cipher picker -->
+  <div class="cipher-grid">
+    <div class="cipher-card selected" onclick="selectCipher('caesar', this)">
+      <span class="cipher-icon">🏛️</span>
+      <div class="cipher-name">Caesar</div>
+    </div>
+    <div class="cipher-card" onclick="selectCipher('rot13', this)">
+      <span class="cipher-icon">🔄</span>
+      <div class="cipher-name">ROT-13</div>
+    </div>
+    <div class="cipher-card" onclick="selectCipher('atbash', this)">
+      <span class="cipher-icon">🪞</span>
+      <div class="cipher-name">Atbash</div>
+    </div>
+    <div class="cipher-card" onclick="selectCipher('morse', this)">
+      <span class="cipher-icon">📡</span>
+      <div class="cipher-name">Morse</div>
+    </div>
+    <div class="cipher-card" onclick="selectCipher('binary', this)">
+      <span class="cipher-icon">💻</span>
+      <div class="cipher-name">Binary</div>
+    </div>
+    <div class="cipher-card" onclick="selectCipher('emoji', this)">
+      <span class="cipher-icon">🤫</span>
+      <div class="cipher-name">Emoji</div>
+    </div>
+    <div class="cipher-card" onclick="selectCipher('reverse', this)">
+      <span class="cipher-icon">⏪</span>
+      <div class="cipher-name">Reverse</div>
+    </div>
+    <div class="cipher-card" onclick="selectCipher('pig', this)">
+      <span class="cipher-icon">🐷</span>
+      <div class="cipher-name">Pig Latin</div>
+    </div>
+    <div class="cipher-card" onclick="selectCipher('kaomoji', this)">
+      <span class="cipher-icon">( ˶ˆᗜˆ˵ )</span>
+      <div class="cipher-name">Kaomoji</div>
+    </div>
+    <div class="cipher-card" onclick="selectCipher('symbols', this)">
+      <span class="cipher-icon">∑</span>
+      <div class="cipher-name">Symbols</div>
+    </div>
+  </div>
+
+  <!-- Caesar key -->
+  <div class="key-row" id="caesarKey">
+    <span class="key-label">🗝 Shift Key:</span>
+    <input type="number" class="key-input" id="shiftVal" value="3" min="1" max="25"
+           oninput="document.getElementById('shiftSlider').value=this.value; process()">
+    <input type="range" id="shiftSlider" min="1" max="25" value="3"
+           oninput="document.getElementById('shiftVal').value=this.value; process()">
+  </div>
+
+  <!-- I/O area -->
+  <div class="io-grid">
+    <div class="io-panel">
+      <div class="io-header">
+        <span class="io-label" id="inputLabel">▸ PLAINTEXT</span>
+        <span class="char-count" id="charCount">0 chars</span>
+      </div>
+      <textarea class="io-textarea" id="inputText" placeholder="Type your secret message here..."
+                oninput="updateCount(); process()"></textarea>
+    </div>
+
+    <div class="arrow-col">
+      <div class="arrow-icon">→</div>
+    </div>
+
+    <div class="io-panel">
+      <div class="io-header">
+        <span class="io-label" id="outputLabel">▸ ENCODED</span>
+        <span class="char-count" id="outputCount">0 chars</span>
+      </div>
+      <textarea class="io-textarea output" id="outputText" placeholder="Output appears here..." readonly></textarea>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="actions" style="margin-bottom:1.5rem">
+    <button class="btn btn-primary" onclick="process()">⚡ PROCESS</button>
+    <button class="btn btn-secondary" onclick="copyOutput()">📋 COPY OUTPUT</button>
+    <button class="btn btn-secondary" onclick="swapIO()">⇄ SWAP</button>
+    <button class="btn btn-danger" onclick="clearAll()">✕ CLEAR</button>
+    <div class="legend-toggle" id="legendToggle" onclick="toggleLegend()" style="display:none">
+      📖 EMOJI LEGEND
+    </div>
+  </div>
+
+  <!-- Emoji legend -->
+  <div class="legend" id="emojiLegend">
+    <div class="legend-title">// EMOJI CIPHER MAP — A to Z + 0–9</div>
+    <div class="legend-grid" id="legendGrid"></div>
+  </div>
+
+  <!-- Kaomoji legend -->
+  <div class="legend" id="kaomojiLegend">
+    <div class="legend-title">// KAOMOJI CIPHER MAP — A to Z · separated by │</div>
+    <div class="legend-grid" id="kaomojiLegendGrid" style="grid-template-columns: repeat(auto-fill, minmax(160px,1fr))"></div>
+  </div>
+
+  <!-- Symbols legend -->
+  <div class="legend" id="symbolsLegend">
+    <div class="legend-title">// SYMBOLS CIPHER MAP — A to Z + 0–9</div>
+    <div class="legend-grid" id="symbolsLegendGrid"></div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast">COPIED TO CLIPBOARD</div>
+
+<script>
+// ─── STATE ────────────────────────────────────────────────────
+let mode = 'encode';
+let cipher = 'caesar';
+
+// ─── EMOJI MAP (all values unique — no duplicates) ────────────
+const EMOJI_MAP = {
+  'a':'🐝','b':'🦋','c':'🌸','d':'💎','e':'⚡','f':'🔥','g':'🌿',
+  'h':'🏔️','i':'🧊','j':'🎯','k':'🔑','l':'🌊','m':'🌙','n':'🌑',
+  'o':'⭕','p':'🦜','q':'❓','r':'🌹','s':'⭐','t':'🌴','u':'☂️',
+  'v':'🏆','w':'🌬️','x':'❌','y':'🌟','z':'🦄',
+  '0':'0️⃣','1':'1️⃣','2':'2️⃣','3':'3️⃣','4':'4️⃣',
+  '5':'5️⃣','6':'6️⃣','7':'7️⃣','8':'8️⃣','9':'9️⃣',
+  ' ':'🔲'
+};
+
+// Build reverse map
+const EMOJI_REVERSE = {};
+for (const [k, v] of Object.entries(EMOJI_MAP)) {
+  EMOJI_REVERSE[v] = k;
+}
+
+// Build legend
+(function buildLegend() {
+  const grid = document.getElementById('legendGrid');
+  const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'.split('');
+  letters.forEach(ch => {
+    if (!EMOJI_MAP[ch]) return;
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    item.innerHTML = `<span>${EMOJI_MAP[ch]}</span><span>→ ${ch.toUpperCase()}</span>`;
+    grid.appendChild(item);
+  });
+})();
+
+// ─── KAOMOJI MAP ─────────────────────────────────────────────
+const KAOMOJI_MAP = {
+  'a':'(✿◠‿◠)','b':'(◕‿◕✿)','c':'(¬‿¬)','d':'(ᵔᴥᵔ)','e':'(≧◡≦)',
+  'f':'(｡♥‿♥｡)','g':'ʕ•ᴥ•ʔ','h':'(つ≧▽≦)つ','i':'(⌐■_■)','j':'ヽ(^‿^)ノ',
+  'k':'(ò_ó)','l':'(◡‿◡✿)','m':'٩(◕‿◕)۶','n':'(¯\\_(ツ)_/¯)','o':'(╥﹏╥)',
+  'p':'(^▽^)','q':'(•ω•)','r':'(/◕ヮ◕)/','s':'(˘▽˘>ԅ( ˘⌣˘)','t':'(ノ≧▽≦)ノ',
+  'u':'(づ◡﹏◡)づ','v':'\\(^o^)/','w':'(·_·)','x':'(╯°□°）╯','y':'(◠‿◠)',
+  'z':'(-_-)zzz',
+  '0':'(0)','1':'(1)','2':'(2)','3':'(3)','4':'(4)',
+  '5':'(5)','6':'(6)','7':'(7)','8':'(8)','9':'(9)',
+  ' ':'~'
+};
+const KAOMOJI_REVERSE = {};
+for (const [k, v] of Object.entries(KAOMOJI_MAP)) KAOMOJI_REVERSE[v] = k;
+
+// ─── SYMBOLS MAP ─────────────────────────────────────────────
+const SYMBOLS_MAP = {
+  'a':'∀','b':'♭','c':'©','d':'∂','e':'∃','f':'ƒ','g':'ℊ',
+  'h':'ℏ','i':'∞','j':'√','k':'ĸ','l':'£','m':'℧','n':'η',
+  'o':'Ø','p':'℗','q':'℺','r':'℞','s':'§','t':'†','u':'μ',
+  'v':'∨','w':'ω','x':'×','y':'¥','z':'ℤ',
+  '0':'⓪','1':'①','2':'②','3':'③','4':'④',
+  '5':'⑤','6':'⑥','7':'⑦','8':'⑧','9':'⑨',
+  ' ':'⌇'
+};
+const SYMBOLS_REVERSE = {};
+for (const [k, v] of Object.entries(SYMBOLS_MAP)) SYMBOLS_REVERSE[v] = k;
+
+// Build kaomoji legend
+(function buildKaomojiLegend() {
+  const grid = document.getElementById('kaomojiLegendGrid');
+  'abcdefghijklmnopqrstuvwxyz0123456789'.split('').forEach(ch => {
+    if (!KAOMOJI_MAP[ch]) return;
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    item.style.cssText = 'font-size:0.65rem; flex-direction:column; align-items:flex-start; gap:2px';
+    item.innerHTML = `<span style="color:var(--accent3);font-weight:700">${ch.toUpperCase()}</span><span style="color:var(--text)">${KAOMOJI_MAP[ch]}</span>`;
+    grid.appendChild(item);
+  });
+})();
+
+// Build symbols legend
+(function buildSymbolsLegend() {
+  const grid = document.getElementById('symbolsLegendGrid');
+  'abcdefghijklmnopqrstuvwxyz0123456789'.split('').forEach(ch => {
+    if (!SYMBOLS_MAP[ch]) return;
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    item.innerHTML = `<span style="font-size:1.1rem;color:var(--accent2)">${SYMBOLS_MAP[ch]}</span><span>→ ${ch.toUpperCase()}</span>`;
+    grid.appendChild(item);
+  });
+})();
+const MORSE = {
+  'a':'.-','b':'-...','c':'-.-.','d':'-..','e':'.','f':'..-.','g':'--.','h':'....','i':'..','j':'.---','k':'-.-','l':'.-..','m':'--','n':'-.','o':'---','p':'.--.','q':'--.-','r':'.-.','s':'...','t':'-','u':'..-','v':'...-','w':'.--','x':'-..-','y':'-.--','z':'--..',
+  '0':'-----','1':'.----','2':'..---','3':'...--','4':'....-','5':'.....','6':'-....','7':'--...','8':'---..','9':'----.',
+  ' ':'/'
+};
+const MORSE_REVERSE = {};
+for (const [k, v] of Object.entries(MORSE)) MORSE_REVERSE[v] = k;
+
+// ─── CIPHER ENGINES ──────────────────────────────────────────
+function caesarShift(text, shift) {
+  return text.split('').map(ch => {
+    if (/[a-z]/.test(ch)) return String.fromCharCode(((ch.charCodeAt(0)-97+shift)%26+26)%26+97);
+    if (/[A-Z]/.test(ch)) return String.fromCharCode(((ch.charCodeAt(0)-65+shift)%26+26)%26+65);
+    return ch;
+  }).join('');
+}
+
+function encodeMorse(text) {
+  return text.toLowerCase().split('').map(ch => MORSE[ch] || '?').join(' ');
+}
+
+function decodeMorse(text) {
+  // BUG FIX: filter out empty tokens caused by multiple/trailing spaces
+  return text.trim().split(' ').filter(tok => tok !== '').map(tok => {
+    if (tok === '/') return ' ';
+    return MORSE_REVERSE[tok] || '?';
+  }).join('');
+}
+
+function encodeBinary(text) {
+  return text.split('').map(ch => ch.charCodeAt(0).toString(2).padStart(8,'0')).join(' ');
+}
+
+function decodeBinary(text) {
+  // BUG FIX: empty string returns empty, not '?'
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+  return trimmed.split(/\s+/).map(b => {
+    if (!b) return '';
+    const code = parseInt(b, 2);
+    return isNaN(code) ? '?' : String.fromCharCode(code);
+  }).join('');
+}
+
+function encodeEmoji(text) {
+  return text.toLowerCase().split('').map(ch => EMOJI_MAP[ch] || ch).join('');
+}
+
+function decodeEmoji(text) {
+  // Extract emoji sequences using segmenter
+  const segments = [];
+  // Use a simple grapheme cluster approach
+  const segmenter = (typeof Intl !== 'undefined' && Intl.Segmenter)
+    ? new Intl.Segmenter('en', { granularity: 'grapheme' })
+    : null;
+
+  if (segmenter) {
+    for (const seg of segmenter.segment(text)) {
+      segments.push(seg.segment);
+    }
+  } else {
+    // Fallback: split by emoji-ish boundaries
+    const emojiRegex = /\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\d️⃣|[^\x00-\x7F]/gu;
+    let match, last = 0;
+    while ((match = emojiRegex.exec(text)) !== null) {
+      if (match.index > last) {
+        for (const ch of text.slice(last, match.index)) segments.push(ch);
+      }
+      segments.push(match[0]);
+      last = match.index + match[0].length;
+    }
+    for (const ch of text.slice(last)) segments.push(ch);
+  }
+
+  return segments.map(seg => EMOJI_REVERSE[seg] || seg).join('');
+}
+
+function encodePigLatin(text) {
+  return text.split(/\b/).map(word => {
+    if (!/[a-zA-Z]/.test(word)) return word;
+    const lower = word.toLowerCase();
+    const vowels = 'aeiou';
+    if (vowels.includes(lower[0])) return word + 'way';
+    let i = 0;
+    while (i < lower.length && !vowels.includes(lower[i])) i++;
+    // All consonants — no vowel found
+    if (i === lower.length) return word + 'ay';
+    return word.slice(i) + word.slice(0, i) + 'ay';
+  }).join('');
+}
+
+function decodePigLatin(text) {
+  // BUG FIX: improved decode by scanning from end of base for consonant cluster
+  const vowels = 'aeiou';
+  return text.split(/\b/).map(word => {
+    if (!/[a-zA-Z]/.test(word)) return word;
+    if (word.endsWith('way') && word.length > 3) {
+      return word.slice(0, -3); // vowel-start words: strip 'way'
+    }
+    if (word.endsWith('ay') && word.length > 2) {
+      const base = word.slice(0, -2); // strip 'ay'
+      // Find consonant cluster at the end of base (these were moved from front)
+      let i = base.length - 1;
+      while (i >= 0 && !vowels.includes(base[i].toLowerCase())) i--;
+      // i now points to last vowel; consonants are base[i+1..]
+      const consonants = base.slice(i + 1);
+      const rest = base.slice(0, i + 1);
+      return consonants + rest;
+    }
+    return word;
+  }).join('');
+}
+
+function atbash(text) {
+  return text.split('').map(ch => {
+    if (/[a-z]/.test(ch)) return String.fromCharCode(122 - (ch.charCodeAt(0) - 97));
+    if (/[A-Z]/.test(ch)) return String.fromCharCode(90 - (ch.charCodeAt(0) - 65));
+    return ch;
+  }).join('');
+}
+
+function encodeKaomoji(text) {
+  // Each character → kaomoji, separated by │
+  return text.toLowerCase().split('').map(ch => KAOMOJI_MAP[ch] || ch).join('│');
+}
+
+function decodeKaomoji(text) {
+  // Split by │ separator and reverse-lookup each token
+  return text.split('│').map(tok => {
+    if (tok === '') return '';
+    return KAOMOJI_REVERSE[tok] !== undefined ? KAOMOJI_REVERSE[tok] : tok;
+  }).join('');
+}
+
+function encodeSymbols(text) {
+  return text.toLowerCase().split('').map(ch => SYMBOLS_MAP[ch] || ch).join('');
+}
+
+function decodeSymbols(text) {
+  // Each symbol is a single Unicode character — use spread for multi-byte safety
+  return [...text].map(ch => SYMBOLS_REVERSE[ch] !== undefined ? SYMBOLS_REVERSE[ch] : ch).join('');
+}
+
+// ─── PROCESS ─────────────────────────────────────────────────
+function process() {
+  const input = document.getElementById('inputText').value;
+  let output = '';
+  const shift = parseInt(document.getElementById('shiftVal').value) || 3;
+  const enc = mode === 'encode';
+
+  switch (cipher) {
+    case 'caesar':
+      output = caesarShift(input, enc ? shift : (26 - shift));
+      break;
+    case 'rot13':
+      output = caesarShift(input, 13);
+      break;
+    case 'atbash':
+      output = atbash(input); // symmetric
+      break;
+    case 'morse':
+      output = enc ? encodeMorse(input) : decodeMorse(input);
+      break;
+    case 'binary':
+      output = enc ? encodeBinary(input) : decodeBinary(input);
+      break;
+    case 'emoji':
+      output = enc ? encodeEmoji(input) : decodeEmoji(input);
+      break;
+    case 'reverse':
+      // BUG FIX: use [...input] instead of split('') to handle multi-codepoint emoji correctly
+      output = [...input].reverse().join('');
+      break;
+    case 'pig':
+      output = enc ? encodePigLatin(input) : decodePigLatin(input);
+      break;
+    case 'kaomoji':
+      output = enc ? encodeKaomoji(input) : decodeKaomoji(input);
+      break;
+    case 'symbols':
+      output = enc ? encodeSymbols(input) : decodeSymbols(input);
+      break;
+  }
+
+  document.getElementById('outputText').value = output;
+  document.getElementById('outputCount').textContent = [...output].length + ' chars';
+}
+
+// ─── UI HELPERS ──────────────────────────────────────────────
+function setMode(m) {
+  mode = m;
+  document.getElementById('encodeBtn').classList.toggle('active', m === 'encode');
+  document.getElementById('decodeBtn').classList.toggle('active', m === 'decode');
+  document.getElementById('inputLabel').textContent = m === 'encode' ? '▸ PLAINTEXT' : '▸ CIPHERTEXT';
+  document.getElementById('outputLabel').textContent = m === 'encode' ? '▸ ENCODED' : '▸ DECODED';
+  document.getElementById('inputText').value = '';
+  document.getElementById('outputText').value = '';
+  document.getElementById('charCount').textContent = '0 chars';
+  document.getElementById('outputCount').textContent = '0 chars';
+  process();
+}
+
+function selectCipher(c, el) {
+  cipher = c;
+  document.querySelectorAll('.cipher-card').forEach(card => card.classList.remove('selected'));
+  el.classList.add('selected');
+  document.getElementById('caesarKey').style.display = c === 'caesar' ? 'flex' : 'none';
+
+  // Legend toggle — show for emoji/kaomoji/symbols
+  const hasLegend = ['emoji','kaomoji','symbols'].includes(c);
+  document.getElementById('legendToggle').style.display = hasLegend ? 'flex' : 'none';
+  const legendLabels = { emoji:'📖 EMOJI LEGEND', kaomoji:'📖 KAOMOJI LEGEND', symbols:'📖 SYMBOLS LEGEND' };
+  if (hasLegend) document.getElementById('legendToggle').textContent = legendLabels[c];
+
+  // Hide all legends, show relevant one if open state carried over
+  ['emojiLegend','kaomojiLegend','symbolsLegend'].forEach(id => {
+    document.getElementById(id).classList.remove('open');
+  });
+  process();
+}
+
+function updateCount() {
+  // BUG FIX: use [...].length instead of .length for accurate emoji character counting
+  const len = [...document.getElementById('inputText').value].length;
+  document.getElementById('charCount').textContent = len + ' chars';
+}
+
+function copyOutput() {
+  const text = document.getElementById('outputText').value;
+  if (!text) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text)
+      .then(() => showToast('COPIED TO CLIPBOARD'))
+      .catch(() => fallbackCopy(text));
+  } else {
+    fallbackCopy(text);
+  }
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try {
+    document.execCommand('copy');
+    showToast('COPIED TO CLIPBOARD');
+  } catch(e) {
+    showToast('SELECT OUTPUT & COPY MANUALLY');
+  }
+  document.body.removeChild(ta);
+}
+
+function swapIO() {
+  const inp = document.getElementById('inputText');
+  const out = document.getElementById('outputText');
+  inp.value = out.value;
+  updateCount();
+  setMode(mode === 'encode' ? 'decode' : 'encode');
+}
+
+function clearAll() {
+  document.getElementById('inputText').value = '';
+  document.getElementById('outputText').value = '';
+  document.getElementById('charCount').textContent = '0 chars';
+  document.getElementById('outputCount').textContent = '0 chars';
+}
+
+function toggleLegend() {
+  const legendMap = { emoji:'emojiLegend', kaomoji:'kaomojiLegend', symbols:'symbolsLegend' };
+  const id = legendMap[cipher];
+  if (id) document.getElementById(id).classList.toggle('open');
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+// Hide caesar key initially shown, show on load
+document.getElementById('caesarKey').style.display = 'flex';
+</script>
+</body>
+</html>
